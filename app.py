@@ -4,121 +4,189 @@ import numpy as np
 import plotly.express as px
 import matplotlib.pyplot as plt
 import seaborn as sns
+from groq import Groq
 
 # Configuración de la página
-st.set_page_config(page_title="Dashboard Energía Renovable", layout="wide")
+st.set_page_config(page_title="Dashboard Analítico & Asistente IA", layout="wide")
 
-# 1. Carga de datos con caché
+# 1. Carga de datos
 @st.cache_data
 def load_data():
-    # Leer el archivo anexo
-    df = pd.read_csv("energia_renovable.csv")
-    # Asegurar que la fecha sea datetime
-    df['Fecha_Entrada_Operacion'] = pd.to_datetime(df['Fecha_Entrada_Operacion'])
-    return df
+    try:
+        df = pd.read_csv("energia_renovable.csv")
+        if 'Fecha_Entrada_Operacion' in df.columns:
+            df['Fecha_Entrada_Operacion'] = pd.to_datetime(df['Fecha_Entrada_Operacion'])
+        return df
+    except Exception as e:
+        return pd.DataFrame() # Retorna dataframe vacío si no encuentra el archivo
 
-try:
-    df = load_data()
-except Exception as e:
-    st.error(f"Error al cargar los datos: {e}")
-    st.stop()
+df = load_data()
 
 # 2. Sidebar
 st.sidebar.title("Configuración")
 st.sidebar.image("https://via.placeholder.com/150", caption="Logo de la Empresa")
 
+# Input para API Key de Groq
+api_key = st.sidebar.text_input("🔑 Groq API Key", type="password", help="Ingresa tu clave de API de Groq para usar el asistente LLaMA 3.3")
+
 st.sidebar.header("Filtros Globales")
-categorias_seleccionadas = st.sidebar.multiselect(
-    "Selecciona Tecnología",
-    options=df["Tecnologia"].unique(),
-    default=df["Tecnologia"].unique()
-)
-
-rango_fechas = st.sidebar.date_input(
-    "Rango de Fechas (Operación)",
-    [df["Fecha_Entrada_Operacion"].min(), df["Fecha_Entrada_Operacion"].max()]
-)
-
-# Filtrar datos
-if len(rango_fechas) == 2:
-    start_date = pd.to_datetime(rango_fechas[0])
-    end_date = pd.to_datetime(rango_fechas[1])
-    df_filtrado = df[(df["Tecnologia"].isin(categorias_seleccionadas)) & 
-                     (df["Fecha_Entrada_Operacion"] >= start_date) & 
-                     (df["Fecha_Entrada_Operacion"] <= end_date)]
+if not df.empty:
+    categorias_seleccionadas = st.sidebar.multiselect(
+        "Selecciona Tecnología",
+        options=df["Tecnologia"].unique(),
+        default=df["Tecnologia"].unique()
+    )
+    
+    min_date = df["Fecha_Entrada_Operacion"].min()
+    max_date = df["Fecha_Entrada_Operacion"].max()
+    rango_fechas = st.sidebar.date_input("Rango de Fechas", [min_date, max_date])
+    
+    if len(rango_fechas) == 2:
+        start_date = pd.to_datetime(rango_fechas[0])
+        end_date = pd.to_datetime(rango_fechas[1])
+        df_filtrado = df[(df["Tecnologia"].isin(categorias_seleccionadas)) & 
+                         (df["Fecha_Entrada_Operacion"] >= start_date) & 
+                         (df["Fecha_Entrada_Operacion"] <= end_date)]
+    else:
+        df_filtrado = df.copy()
 else:
-    df_filtrado = df.copy()
+    st.error("No se pudo cargar el archivo 'energia_renovable.csv'. Asegúrate de que esté en la misma carpeta.")
+    st.stop()
 
-st.title("📊 Dashboard de Análisis - Energía Renovable")
+st.title("⚡ Dashboard Analítico con Asistente IA")
 
 # 3. Pestañas (Tabs)
-tab1, tab2, tab3 = st.tabs(["Resumen Ejecutivo (KPIs)", "Análisis Exploratorio", "Datos Crudos"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔍 EDA", 
+    "📈 Variables Cuantitativas", 
+    "📊 Variables Cualitativas", 
+    "🎨 Reporte Avanzado Visual", 
+    "🤖 Asistente de Datos (Groq)"
+])
 
-# 3.1 Tab 1: Resumen ejecutivo KPI's adaptado al dataset
+# --- TAB 1: EDA ---
 with tab1:
-    st.header("Indicadores Clave de Rendimiento")
+    st.header("Análisis Exploratorio de Datos (EDA)")
     col1, col2, col3 = st.columns(3)
+    col1.metric("Total Filas", df_filtrado.shape[0])
+    col2.metric("Total Columnas", df_filtrado.shape[1])
+    col3.metric("Datos Faltantes", df_filtrado.isnull().sum().sum())
     
-    total_generacion = df_filtrado["Generacion_Diaria_MWh"].sum()
-    total_inversion = df_filtrado["Inversion_Inicial_MUSD"].sum()
-    eficiencia_promedio = df_filtrado["Eficiencia_Planta_Pct"].mean() if not df_filtrado.empty else 0
+    st.subheader("Vista Previa de los Datos")
+    st.dataframe(df_filtrado.head(10), use_container_width=True)
     
-    # Adaptación de las métricas anteriores (Ventas, Beneficios, Margen) al contexto actual
-    col1.metric("Generación Total (MWh)", f"{total_generacion:,.2f}")
-    col2.metric("Inversión Total (MUSD)", f"${total_inversion:,.2f}")
-    col3.metric("Eficiencia Promedio", f"{eficiencia_promedio:.1f}%")
+    st.subheader("Resumen Estadístico")
+    st.dataframe(df_filtrado.describe(), use_container_width=True)
 
-# 3.2 Tab 2: Análisis exploratorio (Gráficos)
+# --- TAB 2: Variables Cuantitativas ---
 with tab2:
-    st.header("Visualizaciones de Datos")
+    st.header("Análisis de Variables Cuantitativas")
+    num_cols = df_filtrado.select_dtypes(include=np.number).columns.tolist()
     
-    col_graf_1, col_graf_2 = st.columns(2)
-    
-    with col_graf_1:
-        st.subheader("Generación por Tecnología (Plotly)")
-        fig_plotly = px.bar(
-            df_filtrado.groupby("Tecnologia")["Generacion_Diaria_MWh"].sum().reset_index(),
-            x="Tecnologia", y="Generacion_Diaria_MWh", color="Tecnologia",
-            title="Generación Acumulada"
-        )
-        st.plotly_chart(fig_plotly, use_container_width=True)
+    if num_cols:
+        col_sel = st.selectbox("Selecciona una variable numérica:", num_cols)
         
-    with col_graf_2:
-        st.subheader("Tendencia de Inversión (Pyplot)")
-        fig_plt, ax = plt.subplots(figsize=(6, 4))
-        # Agrupar por mes para que el gráfico de línea se vea más claro
+        col_chart1, col_chart2 = st.columns(2)
+        with col_chart1:
+            fig_hist = px.histogram(df_filtrado, x=col_sel, title=f"Distribución de {col_sel}", marginal="box")
+            st.plotly_chart(fig_hist, use_container_width=True)
+            
+        with col_chart2:
+            st.write(f"**Estadísticas descriptivas para {col_sel}:**")
+            st.write(df_filtrado[col_sel].describe())
+    else:
+        st.info("No hay variables cuantitativas en el dataset.")
+
+# --- TAB 3: Variables Cualitativas ---
+with tab3:
+    st.header("Análisis de Variables Cualitativas")
+    cat_cols = df_filtrado.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+    
+    if cat_cols:
+        col_sel_cat = st.selectbox("Selecciona una variable categórica:", cat_cols)
+        
+        fig_bar = px.bar(df_filtrado[col_sel_cat].value_counts().reset_index(), 
+                         x=col_sel_cat, y='count', 
+                         title=f"Conteo de categorías para {col_sel_cat}",
+                         color=col_sel_cat)
+        st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        st.info("No hay variables cualitativas en el dataset.")
+
+# --- TAB 4: Reporte Avanzado Visual ---
+with tab4:
+    st.header("Reporte Visual Avanzado")
+    
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        st.subheader("Evolución de Inversión en el Tiempo")
         df_fechas = df_filtrado.groupby(df_filtrado["Fecha_Entrada_Operacion"].dt.to_period("M"))["Inversion_Inicial_MUSD"].sum().reset_index()
         df_fechas["Fecha_Entrada_Operacion"] = df_fechas["Fecha_Entrada_Operacion"].dt.to_timestamp()
-        ax.plot(df_fechas["Fecha_Entrada_Operacion"], df_fechas["Inversion_Inicial_MUSD"], marker='o', linestyle='-', color='g')
-        ax.set_title("Inversión Inicial en el tiempo")
-        ax.set_xlabel("Fecha de Operación")
-        ax.set_ylabel("Inversión (MUSD)")
-        plt.xticks(rotation=45)
-        st.pyplot(fig_plt)
+        fig_line = px.line(df_fechas, x="Fecha_Entrada_Operacion", y="Inversion_Inicial_MUSD", markers=True)
+        st.plotly_chart(fig_line, use_container_width=True)
         
-    st.subheader("Generación vs Inversión (Seaborn)")
-    fig_sns, ax_sns = plt.subplots(figsize=(10, 4))
-    sns.scatterplot(
-        data=df_filtrado, 
-        x="Inversion_Inicial_MUSD", 
-        y="Generacion_Diaria_MWh", 
-        hue="Tecnologia", 
-        size="Capacidad_Instalada_MW", 
-        ax=ax_sns
-    )
-    ax_sns.set_title("Scatter Plot: Inversión vs Generación")
-    st.pyplot(fig_sns)
+    with col_v2:
+        st.subheader("Generación vs Inversión por Tecnología")
+        fig_scatter = px.scatter(df_filtrado, x="Inversion_Inicial_MUSD", y="Generacion_Diaria_MWh", 
+                                 color="Tecnologia", size="Capacidad_Instalada_MW", hover_name="ID_Proyecto")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        
+    st.subheader("Matriz de Correlación")
+    numeric_df = df_filtrado.select_dtypes(include=np.number)
+    if not numeric_df.empty:
+        fig_corr, ax_corr = plt.subplots(figsize=(8, 4))
+        sns.heatmap(numeric_df.corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax_corr)
+        st.pyplot(fig_corr)
 
-# 3.3 Datos Crudos y Reportes
-with tab3:
-    st.header("Datos Crudos")
-    st.dataframe(df_filtrado, use_container_width=True)
+# --- TAB 5: Asistente LLaMA 3.3 (Groq) ---
+with tab5:
+    st.header("Asistente Analítico de Datos")
+    st.markdown("Haz preguntas sobre el conjunto de datos actual. El modelo **LLaMA 3.3 70B** responderá basándose en un resumen del dataset filtrado.")
     
-    # Generar Reportes
-    csv = df_filtrado.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar Reporte CSV",
-        data=csv,
-        file_name='reporte_datos_energia.csv',
-        mime='text/csv',
-    )
+    if api_key:
+        try:
+            client = Groq(api_key=api_key)
+            
+            # Construir contexto para el modelo basado en los datos filtrados
+            contexto_datos = (
+                f"El dataset contiene {df_filtrado.shape[0]} filas y las columnas: {', '.join(df_filtrado.columns)}. "
+                f"Resumen numérico:\n{df_filtrado.describe().to_string()}\n"
+            )
+            
+            # Inicializar historial de chat en session_state
+            if "messages" not in st.session_state:
+                st.session_state.messages = [
+                    {"role": "system", "content": f"Eres un analista de datos experto. Ayuda al usuario a entender sus datos. Utiliza este resumen estadístico como contexto:\n{contexto_datos}"}
+                ]
+            
+            # Mostrar historial de chat (ocultando el system prompt)
+            for msg in st.session_state.messages:
+                if msg["role"] != "system":
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+            
+            # Input de usuario
+            if prompt := st.chat_input("Ej: ¿Cuál es la tecnología con mayor inversión promedio?"):
+                # Agregar mensaje de usuario
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # Llamada a Groq
+                with st.spinner("LLaMA 3.3 está analizando..."):
+                    chat_completion = client.chat.completions.create(
+                        messages=st.session_state.messages,
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.3,
+                    )
+                    
+                    respuesta = chat_completion.choices[0].message.content
+                    
+                    # Agregar y mostrar respuesta
+                    st.session_state.messages.append({"role": "assistant", "content": respuesta})
+                    with st.chat_message("assistant"):
+                        st.markdown(respuesta)
+        except Exception as e:
+            st.error(f"Error de conexión con Groq: {e}. Verifica tu API Key.")
+    else:
+        st.info("👈 Por favor, ingresa tu API Key de Groq en la barra lateral para habilitar el chat.")
